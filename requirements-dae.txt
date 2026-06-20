@@ -1,0 +1,7 @@
+# Ambiente DEDICADO ao CNN-DAE (técnica inteligente da Entrega 2).
+# Usar Python 3.12 num venv separado (.venv-dae): TensorFlow não tem wheels p/ Python 3.14.
+#   python3.12 -m venv .venv-dae
+#   source .venv-dae/bin/activate
+#   pip install -r requirements-dae.txt -r requirements.txt
+tensorflow
+keras

@@ -1,0 +1,34 @@
+# Ambiente
+.venv/
+.venv-dae/
+__pycache__/
+*.py[cod]
+.python-version
+
+# Dados (baixados via wfdb — ver README)
+data/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Modelos / pesos do DAE
+*.h5
+*.keras
+*.ckpt
+
+# Figuras geradas (mantém a pasta, ignora o conteúdo pesado se quiser versionar deixe comentado)
+# figures/*.png
+
+# LaTeX (artefatos de build)
+report/*.aux
+report/*.log
+report/*.bbl
+report/*.blg
+report/*.out
+report/*.toc
+report/main.pdf
+
+# SO / editor
+.DS_Store
+.vscode/
+.idea/
