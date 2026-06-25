@@ -3,5 +3,10 @@
 #   python3.12 -m venv .venv-dae
 #   source .venv-dae/bin/activate
 #   pip install -r requirements-dae.txt -r requirements.txt
-tensorflow
-keras
+tensorflow>=2.15
+wfdb
+numpy
+matplotlib
+pandas
+jupyter
+ipywidgets
