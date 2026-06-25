@@ -3,7 +3,7 @@
 #   python3.12 -m venv .venv-dae
 #   source .venv-dae/bin/activate
 #   pip install -r requirements-dae.txt -r requirements.txt
-tensorflow>=2.15
+tensorflow
 wfdb
 numpy
 matplotlib
