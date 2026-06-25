@@ -1,9 +1,9 @@
 # Ambiente principal (Python 3.12) — tudo exceto o DAE (TensorFlow vai em requirements-dae.txt)
-numpy>=1.24 
+numpy
 scipy
 wfdb
 pywavelets
 matplotlib
-pandas>=2.0
+pandas>=2.2.2
 jupyter
 ipywidgets
