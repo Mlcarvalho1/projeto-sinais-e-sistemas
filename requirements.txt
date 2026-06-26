@@ -4,6 +4,6 @@ scipy
 wfdb
 pywavelets
 matplotlib
-pandas
+pandas>=2.2.2
 jupyter
 ipywidgets

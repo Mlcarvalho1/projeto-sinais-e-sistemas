@@ -4,4 +4,9 @@
 #   source .venv-dae/bin/activate
 #   pip install -r requirements-dae.txt -r requirements.txt
 tensorflow
-keras
+wfdb
+numpy
+matplotlib
+pandas
+jupyter
+ipywidgets
