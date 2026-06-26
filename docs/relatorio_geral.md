@@ -1,9 +1,9 @@
 # Relatório Geral — Filtros Digitais para Processamento de Sinais Biomédicos
-## Estudo comparativo de *denoising* de ECG (convencionais × avançados)
+## Estudo comparativo de *denoising* de ECG (convencionais × avançados × inteligente)
 
 **Disciplina:** Sinais e Sistemas (ES413) — CIn/UFPE
 **Bases:** MIT-BIH Arrhythmia Database (`mitdb`) + Noise Stress Test Database (`nstdb`), PhysioNet
-**Equipe:** ES413 (Manoel & equipe)
+**Equipe:** ES413 (Manoel L.Carvalho, Emanuell Luiz, Deoclécio)
 
 ---
 
@@ -18,18 +18,23 @@ classes de ruído tipicamente encontradas em registros clínicos de ECG:
 - **Variação da linha de base (0,05–0,5 Hz)** — *baseline wander*, de origem respiratória e de movimento;
 - **Ruído muscular / aleatório (> 40 Hz)** — artefato mioelétrico (EMG) e ruído de banda larga.
 
-O estudo está organizado em **duas frentes complementares**, que correspondem às duas entregas da disciplina:
+O estudo está organizado em **três frentes complementares**, que cobrem as duas entregas da disciplina:
 
 1. **Filtros convencionais (Entrega 1)** — notch IIR de 60 Hz, passa-alta IIR Butterworth de
    0,5 Hz e passa-baixa FIR de fase linear (Hamming) de 40 Hz. Implementados como biblioteca
    reutilizável em `src/` e validados sobre ECG real contaminado de forma controlada.
-2. **Filtros avançados / inteligentes (Entrega 2)** — filtro adaptativo LMS/NLMS e *denoising*
-   por Transformada Wavelet Discreta (DWT), com um *autoencoder* convolucional (CNN-DAE)
-   previsto como técnica inteligente. Desenvolvidos nos notebooks (`filtros`, `sintetico`,
+2. **Filtros avançados clássicos (Entrega 2)** — filtro adaptativo LMS/NLMS e *denoising*
+   por Transformada Wavelet Discreta (DWT). Desenvolvidos nos notebooks (`filtros`, `sintetico`,
    `reais`, `resultados`) e analisados sobre registros reais do MIT-BIH.
+3. **Técnica inteligente (Entrega 2)** — *autoencoder* convolucional de *denoising* (CNN-DAE),
+   um modelo não linear único, treinado de ponta a ponta para tratar **todas** as classes de
+   ruído. Implementado como subprojeto independente em `cnn-dae/` (arquitetura, pipeline de
+   dados, treino e avaliação estatística). Substitui a abordagem que, na versão anterior deste
+   relatório, era apenas *prevista*.
 
 A pergunta central que o relatório responde é: **qual classe de filtro é mais adequada a cada
-tipo de ruído, e por quê?**
+tipo de ruído, e por quê?** — e, no limite, **se um único modelo aprendido consegue substituir
+o conjunto de filtros especializados.**
 
 ---
 
@@ -64,6 +69,23 @@ limiarização (*soft-thresholding*) dos coeficientes de detalhe, com limiar uni
 Donoho & Johnstone, $\lambda = \sigma\sqrt{2\ln N}$ e $\sigma = \mathrm{mediana}(|d_1|)/0{,}6745$.
 A wavelet-mãe `db4` (Daubechies) é escolhida pela semelhança morfológica com o complexo QRS.
 **Não exige sinal de referência externo.**
+
+**Autoencoder convolucional de *denoising* (CNN-DAE).** Um *denoising autoencoder* é uma rede
+neural treinada a reconstruir o sinal limpo $x$ a partir de uma versão corrompida $\tilde{x}$,
+minimizando $\mathcal{L}(x, f_\theta(\tilde{x}))$ sobre muitos pares (ruidoso, limpo). Em sua
+forma totalmente convolucional 1-D, a rede aprende **filtros locais** (kernels) em vez de
+coeficientes fixos projetados à mão: um **encoder** comprime a janela de ECG por convoluções e
+*pooling* (extraindo uma representação cada vez mais abstrata e de menor resolução), um
+**bottleneck** concentra a informação essencial, e um **decoder** reconstrói o sinal por
+*upsampling*. Diferentemente dos filtros lineares (IIR/FIR/adaptativos), o mapeamento
+$f_\theta$ é **não linear** e **aprendido dos dados**, podendo modelar a estrutura morfológica
+do ECG e separar ruído de sinal mesmo quando ambos ocupam a mesma faixa de frequência —
+exatamente o cenário em que o passa-baixa convencional falha. Duas escolhas de projeto são
+centrais: (i) **conexões residuais** ($\text{saída} = F(x) + x$), que fazem a rede aprender
+apenas a *diferença* (o ruído) em vez do sinal inteiro; e (ii) a perda **MAE**, robusta a
+*outliers* (batimentos ectópicos, artefatos), preferível ao MSE para sinais com picos. Como a
+DWT, **não exige sinal de referência externo**; ao contrário de todos os demais, um **único
+modelo** atende a todos os tipos de ruído.
 
 ---
 
@@ -104,6 +126,7 @@ conhecido, calculam-se métricas objetivas (`src/metrics/metrics.py`):
 | LMS | adaptativo FIR | gradiente do erro instantâneo | $\mu = 0{,}005$–$0{,}01$; $M = 5$–$10$ |
 | NLMS | adaptativo FIR | passo normalizado pela energia da entrada | $\mu = 0{,}01$–$0{,}02$; $M = 5$–$10$ |
 | DWT | wavelet | `db4` + *soft-threshold* (Donoho & Johnstone) | níveis 5–9 |
+| CNN-DAE | rede neural (aprendida) | encoder–bottleneck–decoder convolucional 1-D | janela 1024, ~MAE, Adam; ver Parte III |
 
 ### 3.4 Dois cuidados de protocolo (validados em dados reais)
 
@@ -121,8 +144,14 @@ conhecido, calculam-se métricas objetivas (`src/metrics/metrics.py`):
 > alvo). Os filtros avançados (Parte II) foram avaliados sobre registros reais do `mitdb`
 > contaminados com ruído **sintético** específico de cada caso (senoide de 60 Hz, senoide de
 > 0,2 Hz e ruído gaussiano), em janelas de 5 s, usando uma referência adequada a cada método.
-> As condições são **relacionadas, mas não idênticas**; por isso a comparação entre frentes é
-> qualitativa (qual método é robusto a qual ruído), e não um confronto numérico direto de SNR.
+> A técnica inteligente (Parte III) tem **protocolo próprio, mais amplo**: treino/teste sobre os
+> **48 registros** do `mitdb` com *holdout* por registro (10 registros nunca vistos), ruído real
+> (`bw`/`ma`/`em`) e sintético (`60hz`/`50hz`), em janelas de 1024 amostras (≈ 2,84 s). As
+> condições das três frentes são **relacionadas, mas não idênticas**; por isso a comparação entre
+> frentes é qualitativa (qual método é robusto a qual ruído), e não um confronto numérico direto
+> de SNR. O único ponto de contato numérico explícito é a avaliação estatística da Parte III, que
+> testa a CNN-DAE **contra a tabela de referência dos convencionais** (`comparacao_convencionais.csv`)
+> via teste de Wilcoxon.
 
 ---
 
@@ -388,15 +417,150 @@ Padrão central da Parte II:
 
 ---
 
-## 6. Comparação geral do projeto (convencionais × avançados)
+# Parte III — Técnica Inteligente: CNN-DAE
 
-Cruzando as duas frentes, emerge uma divisão de trabalho clara por tipo de ruído:
+A terceira frente é a resposta direta à limitação central das Partes I e II: nenhum filtro
+linear único trata bem **todas** as classes de ruído, e os mais simples (passa-baixa, adaptativo
+sem referência) falham contra ruído de banda larga sobreposto ao ECG. A proposta é um *denoising
+autoencoder* convolucional (CNN-DAE) — **um único modelo não linear, aprendido dos dados**, que
+recebe uma janela de ECG ruidoso e devolve a janela limpa, qualquer que seja o tipo de ruído.
 
-| Ruído | Convencional | Avançado | Leitura |
-|:--|:--|:--|:--|
-| **60 Hz** | Notch IIR — excelente (≈ 34,6 dB, corr 0,999) | LMS/NLMS/DWT — todos bons (28–31 dB) | Ruído de banda estreita: **qualquer abordagem específica resolve**; o notch fixo é o mais simples e robusto. |
-| **Deriva (`bw`/0,2 Hz)** | Passa-alta — excelente (Δ ≈ +18,6 dB) | DWT — excelente (29,5 dB); LMS/NLMS falham (1–2 dB) | Baixa frequência separável: **passa-alta linear ou DWT**; adaptativos distorcem o ECG. |
-| **Muscular / Gaussiano (`ma`/`em`/EMG)** | Passa-baixa FIR — **falha (Δ ≈ 0 dB)** | **DWT — excelente (30,8 dB)**; LMS/NLMS falham | Ruído de banda larga sobreposto ao ECG: **só a DWT resolve bem** — é o ganho concreto do projeto. |
+É um **subprojeto independente** (`cnn-dae/`), sem dependência do código das Partes I/II: tem o
+próprio `data_io` (cobrindo os **48 registros** do `mitdb`, não apenas 5), o próprio módulo de
+contaminação (5 tipos de ruído, SNR contínuo) e o próprio pipeline de dados. O treino é feito no
+Google Colab (GPU T4) pelos notebooks `treino_cnn_dae.ipynb` / `validacao_cnn_dae.ipynb` /
+`avaliacao_cnn_dae.ipynb`.
+
+## 6.1 Arquitetura
+
+Rede totalmente convolucional 1-D no formato **encoder → bottleneck → decoder**, com entrada e
+saída de mesma forma `(1024, 1)` (janelas normalizadas por *z-score*). Os blocos do encoder são
+`Conv1D → BatchNorm → ReLU`; os do bottleneck e do decoder são **blocos residuais**
+($\text{saída} = F(x) + x$), que fazem a rede aprender apenas a *diferença* entre o ruidoso e o
+limpo — isto é, o próprio ruído a remover.
+
+| Estágio | Operação | Resolução (amostras) | Filtros | Kernel |
+|:--|:--|:--:|:--:|:--:|
+| Entrada | — | 1024 | 1 | — |
+| Encoder E1 | Conv-BN-ReLU + MaxPool/2 | 1024 → 512 | 64 | 7 |
+| Encoder E2 | Conv-BN-ReLU + MaxPool/2 | 512 → 256 | 128 | 5 |
+| Encoder E3 | Conv-BN-ReLU + MaxPool/2 | 256 → 128 | 256 | 3 |
+| Encoder E4 | Conv-BN-ReLU + MaxPool/2 | 128 → 64 | 256 | 3 |
+| Bottleneck | 2 × bloco residual | 64 | 512 | 3 |
+| Decoder D1 | UpSampling×2 + residual | 64 → 128 | 256 | 3 |
+| Decoder D2 | UpSampling×2 + residual | 128 → 256 | 128 | 3 |
+| Decoder D3 | UpSampling×2 + residual | 256 → 512 | 64 | 5 |
+| Decoder D4 | UpSampling×2 + residual | 512 → 1024 | 32 | 7 |
+| Saída | Conv1D 1×1 (linear) | 1024 | 1 | 1 |
+
+Decisões de projeto e seus porquês:
+
+- **Kernels grandes nas bordas, pequenos no centro.** Campo receptivo amplo (7/5) na resolução
+  original capta morfologia do batimento; kernels menores (3) onde a resolução já é baixa.
+- **Conexões residuais.** Como o sinal limpo é quase igual à entrada, aprender só a correção
+  ($F(x)$) é mais fácil e estável, além de mitigar o gradiente desvanecente.
+- **Saída linear.** O ECG tem valores negativos (onda Q, ST deprimido); ativação linear na última
+  camada não os trunca.
+- **Perda MAE, métrica MSE.** O MAE é robusto a *outliers* (batimentos ectópicos, artefatos);
+  o MSE acompanha como proxy do SNR de reconstrução. Otimizador Adam, *learning rate* $10^{-3}$.
+
+## 6.2 Protocolo de dados (a contribuição metodológica mais forte)
+
+Aqui está o salto de rigor em relação às Partes I/II, que usavam poucos registros e janelas curtas:
+
+- **Cobertura total:** todos os **48 registros** do MIT-BIH.
+- **Separação por registro (sem vazamento):** **38 registros** (100–219) para treino+validação e
+  **10 registros** (220–234) reservados para **teste — nunca vistos no treino**. Dentro de cada
+  registro de treino, os 80 % iniciais vão para treino e os 20 % finais para validação (corte
+  temporal). Há *asserts* no código garantindo a disjunção treino/teste.
+- **Cinco tipos de ruído em um só modelo:** real do NSTDB (`bw`, `ma`, `em`) **+** rede elétrica
+  sintética (`60hz`, `50hz`). O ruído real também é dividido temporalmente (80 % treino / 20 %
+  teste), de modo que o modelo é testado em trechos de ruído inéditos.
+- **SNR contínuo no treino:** cada janela é contaminada *on-the-fly* com um SNR sorteado
+  uniformemente em **[−2, 20] dB**, tipo de ruído aleatório e fase/posição aleatórias — o modelo
+  vê uma variedade praticamente infinita de condições, em vez de uma grade fixa.
+- **SNR fixo no teste:** grade determinística **{0, 6, 12, 18} dB** (semente 2026), permitindo
+  comparação direta com o protocolo das Partes I/II.
+- **Janela de 1024 amostras** (≈ 2,84 s a 360 Hz), normalização *z-score* usando média/desvio do
+  **sinal limpo** (a mesma transformação é aplicada ao par ruidoso/limpo, preservando a relação
+  entre eles).
+
+## 6.3 Treino
+
+`model.fit` com até **150 épocas**, *batch* 32, 400 *steps*/época (≈ 12.800 janelas) e 100
+*steps* de validação, alimentado por geradores `tf.data` que produzem pares contaminados
+indefinidamente. Os *callbacks* tornam o treino auto-regulado:
+
+- **ModelCheckpoint** — salva o melhor modelo por `val_loss` (`best_model.keras`);
+- **EarlyStopping** — interrompe após 15 épocas sem melhora e restaura os melhores pesos;
+- **ReduceLROnPlateau** — reduz o *learning rate* pela metade após 7 épocas de estagnação (até
+  $10^{-6}$);
+- **TensorBoard** — registro das curvas.
+
+As curvas de aprendizado (MAE/MSE × época) e exemplos de filtragem são gerados ao final do
+treino (`treino_cnn_dae.ipynb`, células 11–12).
+
+## 6.4 Avaliação estatística
+
+A força do subprojeto está na avaliação, bem mais rigorosa que a das partes anteriores. O
+notebook `avaliacao_cnn_dae.ipynb` roda o modelo treinado sobre **toda a grade `ruído × SNR`**
+dos 10 registros de teste e produz, **por janela**, o conjunto completo de métricas
+(`src/metrics/metrics.py`): SNR de saída, Δ SNR, RMSE, PRD, correlação, além de MAE/MSE. Sobre
+essa base por janela, calcula:
+
+- **Estatística descritiva** por tipo de ruído e por SNR de entrada (média, mediana, desvio,
+  quartis e percentis P05/P95) — não só a média, mas a *dispersão* do desempenho;
+- **Taxa de falha** — percentual de janelas em que o modelo *piorou* o sinal (Δ SNR < 0), por
+  condição;
+- **Teste de Wilcoxon** (*signed-rank*) comparando a CNN-DAE com a **tabela de referência dos
+  filtros convencionais** (`comparacao_convencionais.csv`), com *p-valor* e **tamanho de efeito**
+  $r = Z/\sqrt{N}$ — o único confronto numérico direto entre as frentes;
+- **Intervalos de confiança 95 % por *bootstrap*** (B = 1000 reamostragens) para PRD, correlação
+  e Δ SNR médios de cada condição;
+- **Análise de falha** — visualização das piores janelas (menor Δ SNR), para diagnosticar *em que
+  morfologia* o modelo erra;
+- **Boxplots** por ruído e por SNR, e exportação dos resultados (`resultados_por_janela.csv`,
+  `wilcoxon_vs_baseline.csv`, `bootstrap_ic95.csv`).
+
+> **Estado dos resultados quantitativos.** O repositório versiona a **arquitetura, o pipeline e
+> todo o arcabouço de avaliação** da CNN-DAE, mas **não inclui um checkpoint treinado**
+> (`best_model.keras`) nem as figuras/CSVs de saída — os notebooks estão sem células executadas.
+> Os números finais de SNR/Δ SNR/PRD da CNN-DAE são obtidos ao executar
+> `treino_cnn_dae.ipynb` (treino no Colab) seguido de `avaliacao_cnn_dae.ipynb`. Esta Parte III
+> documenta, portanto, **o projeto e o protocolo de avaliação** da técnica inteligente; a
+> consolidação numérica e a sua inserção nas tabelas comparativas da Seção 7 são o passo final
+> imediato (ver Seção 8.2).
+
+## 6.5 O que se espera da CNN-DAE (hipótese de trabalho)
+
+Pela natureza do método — mapeamento não linear aprendido, treinado conjuntamente nas cinco
+classes de ruído e em ampla faixa de SNR — a expectativa, a ser **confirmada pelos números** após
+o treino, é:
+
+- **Generalização única:** um só modelo cobrindo 60 Hz, deriva e EMG/gaussiano, sem troca de
+  filtro nem referência externa — vantagem operacional clara sobre LMS/NLMS;
+- **Ganho potencial no caso mais difícil (banda larga/EMG)**, justamente onde o passa-baixa
+  convencional fica em Δ ≈ 0 dB e os adaptativos falham;
+- **Custo:** exige treino (GPU), dados rotulados (pares limpo/ruidoso) e é menos interpretável que
+  um notch ou um Butterworth — o *trade-off* esperado de uma abordagem de aprendizado.
+
+A avaliação da Seção 6.4 foi desenhada exatamente para **testar** essas hipóteses (inclusive a
+taxa de falha e o Wilcoxon contra o baseline), e não apenas para reportar uma média favorável.
+
+---
+
+## 7. Comparação geral do projeto (convencionais × avançados × inteligente)
+
+Cruzando as três frentes, emerge uma divisão de trabalho clara por tipo de ruído:
+
+| Ruído | Convencional | Avançado clássico | Inteligente (CNN-DAE) | Leitura |
+|:--|:--|:--|:--|:--|
+| **60 Hz** | Notch IIR — excelente (≈ 34,6 dB, corr 0,999) | LMS/NLMS/DWT — todos bons (28–31 dB) | coberto pelo modelo único (a confirmar) | Ruído de banda estreita: **qualquer abordagem específica resolve**; o notch fixo é o mais simples e robusto. |
+| **Deriva (`bw`/0,2 Hz)** | Passa-alta — excelente (Δ ≈ +18,6 dB) | DWT — excelente (29,5 dB); LMS/NLMS falham (1–2 dB) | coberto pelo modelo único (a confirmar) | Baixa frequência separável: **passa-alta linear ou DWT**; adaptativos distorcem o ECG. |
+| **Muscular / Gaussiano (`ma`/`em`/EMG)** | Passa-baixa FIR — **falha (Δ ≈ 0 dB)** | **DWT — excelente (30,8 dB)**; LMS/NLMS falham | alvo principal do modelo (a confirmar) | Ruído de banda larga sobreposto ao ECG: **DWT resolve; a CNN-DAE é a aposta de generalização** num só modelo. |
+| **Todos juntos** | troca de filtro por ruído | troca de método por ruído | **um único modelo para os 5 tipos** | A CNN-DAE é a única abordagem **não especializada por ruído** — sua vantagem operacional. |
+
+*(A coluna CNN-DAE registra o papel projetado; os números entram após o treino — ver Parte III, Seção 6.4.)*
 
 **Conclusões transversais:**
 
@@ -411,71 +575,98 @@ Cruzando as duas frentes, emerge uma divisão de trabalho clara por tipo de ruí
 4. **A escolha do sinal de referência é o fator mais determinante para LMS/NLMS.** Eles brilham
    quando a referência captura a física do ruído (60 Hz) e se tornam inúteis — ou nocivos — quando
    a referência é uma aproximação ou um substituto.
+5. **A CNN-DAE muda o eixo do problema:** em vez de escolher *um filtro por ruído*, propõe **um
+   modelo para todos**. Troca conhecimento de projeto (polos/zeros, limiar wavelet, referência) por
+   dados rotulados e treino. Se os números confirmarem a hipótese da Seção 6.5, ela é a forma mais
+   geral de *denoising* do projeto; o custo é treino, dados e menor interpretabilidade.
 
 ---
 
-## 7. Conclusões e trabalhos futuros
+## 8. Conclusões e trabalhos futuros
 
-### 7.1 Conclusões
+### 8.1 Conclusões
 
-- O projeto cumpriu o objetivo de **projetar, validar e comparar** filtros convencionais e
-  avançados para as três classes de ruído do ECG, com **métricas objetivas** sobre dados reais do
-  PhysioNet.
-- **Não existe um único "melhor filtro":** a escolha ótima depende do ruído. Em ordem de
+- O projeto cumpriu o objetivo de **projetar, validar e comparar** filtros convencionais,
+  avançados clássicos e uma técnica inteligente para as três classes de ruído do ECG, com
+  **métricas objetivas** sobre dados reais do PhysioNet.
+- **Não existe um único "melhor filtro" clássico:** a escolha ótima depende do ruído. Em ordem de
   recomendação prática: **60 Hz → notch IIR**; **deriva → passa-alta Butterworth ou DWT**;
   **EMG/banda larga → DWT**.
-- A **DWT** foi o método mais **robusto e de uso mais simples** entre os avançados (não exige
-  referência, mantém alta fidelidade morfológica nos três ruídos).
+- A **DWT** foi o método mais **robusto e de uso mais simples** entre os avançados clássicos (não
+  exige referência, mantém alta fidelidade morfológica nos três ruídos).
 - Os filtros **adaptativos LMS/NLMS** introduziram distorções relevantes (*overshoot*,
   amplificação de picos R) nos casos de baixa frequência e ruído aleatório — um risco em aplicações
   clínicas, onde a integridade da forma de onda é crítica para o diagnóstico.
 - Os **gráficos de convergência dos pesos** foram úteis para *diagnosticar* a falha: nos casos
   problemáticos os pesos não estabilizam (seguem *drift* ou reagem ao QRS), sintoma direto de
   referência mal correlacionada.
+- A **técnica inteligente (CNN-DAE)** foi **projetada e implementada por completo** — arquitetura
+  residual convolucional, protocolo de dados rigoroso (48 registros, *holdout* por registro, 5
+  tipos de ruído, SNR contínuo) e um arcabouço de avaliação estatística (Wilcoxon vs. baseline,
+  *bootstrap*, análise de falha) mais exigente que o das demais frentes. Falta apenas a execução
+  do treino para consolidar os números (Seção 6.4) — é o único item pendente do projeto.
 
-### 7.2 Possíveis melhorias futuras
+### 8.2 Possíveis melhorias futuras
 
-- **CNN-DAE (técnica inteligente prevista):** treinar um *autoencoder* convolucional para tratar
-  as três classes de ruído em um único modelo não linear (`requirements-dae.txt`, TensorFlow), e
-  compará-lo às demais abordagens sob o mesmo protocolo de contaminação controlada.
+- **Consolidar os resultados da CNN-DAE:** rodar `treino_cnn_dae.ipynb` no Colab, versionar o
+  `best_model.keras`, executar `avaliacao_cnn_dae.ipynb` e inserir os números (SNR/Δ SNR/PRD,
+  Wilcoxon, IC *bootstrap*) nas tabelas comparativas da Seção 7.
 - **Referências mais realistas para o EMG/gaussiano** (ex.: canal de eletrodo de referência
   dedicado, em vez de *delay-line*).
 - **Ajuste sistemático de $\mu$ e $M$** (grid search) para LMS/NLMS nos casos de 0,2 Hz e
   gaussiano, hoje herdados do caso de 60 Hz.
-- **Unificar os protocolos das duas frentes** (mesmos registros, mesma contaminação real do
+- **Unificar os protocolos das três frentes** (mesmos registros, mesma contaminação real do
   `nstdb`, mesmos SNRs alvo) para um confronto numérico estritamente *head-to-head* entre
-  convencionais e avançados.
+  convencionais, avançados clássicos e CNN-DAE.
 - **DWT no caso de 60 Hz com nível de decomposição maior**, já que a FFT pós-DWT ainda mostrou
   energia residual acima de 40 Hz.
+- **Variações da CNN-DAE:** comparar perdas (MAE × MSE × Huber), profundidade do *bottleneck* e
+  janelas mais longas; e treinar uma variante por tipo de ruído para medir o custo de
+  generalização do modelo único.
 
 ---
 
-## 8. Reprodutibilidade
+## 9. Reprodutibilidade
 
 ```
-src/
-  data_io.py            # download/leitura mitdb+nstdb (wfdb, 360 Hz)
+src/                            # Partes I e II
+  data_io.py            # download/leitura mitdb+nstdb (wfdb, 360 Hz) — 5 registros
   noise/contaminate.py  # contaminate(signal, noise_type, snr_db) — bw/ma/em/60hz
   filters/              # notch 60Hz, passa-alta 0.5Hz, passa-baixa FIR 40Hz
   metrics/metrics.py    # SNR/ΔSNR/RMSE/PRD/correlação
   viz/plots.py          # polos-zeros, |H(e^jω)|, atraso de grupo, FFT, overlay
 notebooks/
   01_dados, 02_filtros_convencionais, 03_demo       # convencionais (+ demo interativa)
-  filtros, sintetico, reais, resultados             # avançados (LMS/NLMS/DWT)
+  filtros, sintetico, reais, resultados             # avançados clássicos (LMS/NLMS/DWT)
 scripts/gerar_figuras.py   # gera figuras de formalização + comparacao_convencionais.csv
 report/                    # fontes LaTeX (introdução + fundamentação)
 figures/                   # figuras e tabela usadas neste relatório
+
+cnn-dae/                        # Parte III (subprojeto independente)
+  src/data_io.py          # 48 registros mitdb + nstdb
+  src/noise/contaminate.py# 5 tipos de ruído, SNR contínuo
+  src/models/dataset.py   # pools, splits sem vazamento, geradores, tabela de teste
+  src/models/model.py     # arquitetura CNN-DAE + callbacks
+  train.py                # treino por linha de comando
+  notebooks/              # treino / validacao / avaliacao (Colab T4)
+  checkpoints/            # best_model.keras (gerado pelo treino — não versionado)
 ```
 
 ```bash
+# Partes I e II
 python3.12 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt                                         # pandas>=2.2.2 fixado
 python -c "from src.data_io import ensure_datasets; ensure_datasets()"   # baixa os dados
 ./.venv/bin/python scripts/gerar_figuras.py                              # reproduz Parte I
 # Parte II: executar notebooks/resultados.ipynb (roda filtros+sintetico+reais)
+
+# Parte III (CNN-DAE) — local
+cd cnn-dae && pip install -r requirements.txt
+python train.py                                                          # treina (CPU/GPU)
+# ou, no Colab (T4): treino_cnn_dae.ipynb → validacao_cnn_dae.ipynb → avaliacao_cnn_dae.ipynb
 ```
 
-## 9. Referências principais
+## 10. Referências principais
 
 - Rangayyan, R. M.; Krishnan, S. *Biomedical Signal Analysis*, 3ª ed., Wiley, 2024.
 - Challis, R. E.; Kitney, R. I. *The design of digital filters for biomedical signal processing*
